@@ -1,0 +1,29 @@
+{
+  "name": "scanner",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "ts-node src/scan.ts",
+    "build": "tsc -p tsconfig.json",
+    "scan": "node dist/scan.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.28.0",
+  "dependencies": {
+    "fast-glob": "^3.3.3",
+    "minimist": "^1.2.8",
+    "node-fetch": "^2.7.0",
+    "p-limit": "^7.2.0",
+    "semver": "^7.7.3",
+    "toml": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/minimist": "^1.2.5",
+    "@types/node": "^25.0.9",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
