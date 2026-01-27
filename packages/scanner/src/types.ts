@@ -25,10 +25,10 @@ interface PackageJson {
 }
 
 interface ScanOptions {
-  concurrency: number
-  skipRegistries: boolean
-  cachePath: string
-  verbose: boolean
+  concurrency: number;
+  skipRegistries: boolean;
+  cachePath: string;
+  verbose: boolean;
 }
 
 export { Snapshot, PackageJson, Package, DependencyInfo, ScanOptions };
