@@ -107,4 +107,4 @@ type ScanEvent =
   | ErrorEvent
   | SnapshotEvent;
 
-export { Snapshot, PackageJson, Package, DependencyInfo, ScanOptions, ScanStreamOptions, ScanEvent };
+export { Snapshot, PackageJson, Package, DependencyInfo, ScanOptions, ScanStreamOptions, BaseEvent, DiscoverEvent, ProjectStartEvent, PackageEvent, ProjectDoneEvent, LogEvent, ErrorEvent, ScanEvent };
