@@ -3,39 +3,7 @@
 import fs from "fs";
 import path from "path";
 import os from "os";
-
-interface Snapshot {
-  scannedAt: string;
-  root: string;
-  packages?: PackageJson[];
-}
-
-interface DependencyInfo {
-  declaredVersion: string;
-  installedVersion?: string;
-  latestVersion?: string;
-  latestSatisfyingVersion?: string;
-}
-
-interface Package {
-  name: string;
-  version: string;
-  source: string;
-  manifestPath: string;
-  dependencies: Record<string, DependencyInfo>;
-}
-
-interface PackageJson {
-  manifest: string;
-  packages: Package[];
-}
-
-interface ScanOptions {
-  concurrency: number
-  skipRegistries: boolean
-  cachePath: string
-  verbose: boolean
-}
+import { Package, PackageJson, DependencyInfo, Snapshot, ScanOptions } from "./types";
 
 function resolveRoot(root: string): string {
   const resolved = path.resolve(root);

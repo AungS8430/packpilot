@@ -5,6 +5,7 @@ import path from "path";
 import minimist from "minimist";
 import { resolve } from "@tauri-apps/api/path";
 import * as process from "node:process";
+import { ScanOptions, Snapshot } from "./types";
 
 type Args = {
   dir?: string;
@@ -73,7 +74,7 @@ async function main() {
 
   const root = path.resolve(argv.dir || process.cwd());
   const outPath = path.resolve(argv.out || path.join(process.cwd(), "web", "public", "scan-report.json"));
-  const opts = {
+  const opts: ScanOptions = {
     concurrency: argv.concurrency,
     skipRegistries: Boolean(argv["skip-registries"] || argv.skipRegistries),
     cachePath: argv.cache,
@@ -161,7 +162,7 @@ async function main() {
 
       if (argv.verbose) console.log(`Starting scan of workspace at ${root}...`);
 
-      const snapshot = await scanFn(root, opts);
+      const snapshot: Snapshot = await scanFn(root, opts);
 
       if (!snapshot || typeof snapshot !== "object") {
         throw new Error("Scan did not return a valid snapshot object.");
