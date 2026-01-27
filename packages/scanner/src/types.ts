@@ -25,10 +25,11 @@ interface PackageJson {
 }
 
 interface ScanOptions {
-  concurrency: number;
-  skipRegistries: boolean;
-  cachePath: string;
-  verbose: boolean;
+  concurrency?: number;
+  skipRegistries?: boolean;
+  cachePath?: string;
+  verbose?: boolean;
+  signal?: AbortSignal; // optional cancellation signal
 }
 
 interface ScanStreamOptions extends ScanOptions {
