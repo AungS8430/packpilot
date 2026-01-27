@@ -31,4 +31,80 @@ interface ScanOptions {
   verbose: boolean;
 }
 
-export { Snapshot, PackageJson, Package, DependencyInfo, ScanOptions };
+interface ScanStreamOptions extends ScanOptions {
+  outPath?: string;
+}
+
+type BaseEvent = {
+  type: string;
+  time: string;
+  seq?: number;
+};
+
+type DiscoverEvent = BaseEvent & {
+  type: 'discover';
+  totalProjects: number;
+  manifests?: string[];
+};
+
+type ProjectStartEvent = BaseEvent & {
+  type: 'project-start';
+  project: string;
+  manifestFile: string;
+  manifestType: string;
+};
+
+type PackageEvent = BaseEvent & {
+  type: 'package';
+  project: string;
+  pkg: {
+    name: string;
+    manager: 'npm' | 'pypi' | 'crates';
+    declaredSpec?: string | null;
+    installedVersion?: string | null;
+    latestVersion?: string | null;
+    latestMatching?: string | null;
+    status?: 'ok' | 'outdated' | 'unknown';
+    updateType?: 'major'|'minor'|'patch'|'unknown';
+    manifestFile: string;
+    notes?: string[];
+  };
+};
+
+type ProjectDoneEvent = BaseEvent & {
+  type: 'project-done';
+  project: string;
+  counts: { total: number; outdated: number; unknown: number };
+  durationMs?: number;
+};
+
+type LogEvent = BaseEvent & {
+  type: 'log';
+  level: 'info' | 'warn' | 'error';
+  msg: string;
+  context?: Record<string, any>;
+};
+
+type ErrorEvent = BaseEvent & {
+  type: 'error';
+  scope: 'project' | 'registry' | 'global';
+  message: string;
+  detail?: any;
+};
+
+type SnapshotEvent = BaseEvent & {
+  type: 'snapshot';
+  path?: string;
+  summary?: { projects: number; packages: number; outdated: number };
+};
+
+type ScanEvent =
+  | DiscoverEvent
+  | ProjectStartEvent
+  | PackageEvent
+  | ProjectDoneEvent
+  | LogEvent
+  | ErrorEvent
+  | SnapshotEvent;
+
+export { Snapshot, PackageJson, Package, DependencyInfo, ScanOptions, ScanStreamOptions, ScanEvent };
