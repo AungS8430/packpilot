@@ -539,7 +539,7 @@ async function fetchUpdates(packages: Package[]): Promise<Record<string, Set<str
   return bySource;
 }
 
-export async function scanWorkspace(root: string, ops: ScanOptions): Promise<Snapshot> {
+export async function scanWorkspace(root: string, opts: ScanOptions): Promise<Snapshot> {
   const resolved = resolveRoot(root);
 
   const manifestFiles: string[] = [];
