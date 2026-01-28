@@ -21,3 +21,4 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+/packages/scanner/web/public/scan-report.json

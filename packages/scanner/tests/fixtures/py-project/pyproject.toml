@@ -1,0 +1,14 @@
+[tool.poetry]
+name = "py-project"
+version = "0.1.0"
+description = "Small test Python project for packpilot scanner"
+authors = ["Test <test@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+requests = "2.25.1"
+numpy = "1.21.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

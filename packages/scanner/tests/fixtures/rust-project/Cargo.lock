@@ -1,0 +1,14 @@
+[root]
+version = 1
+
+[[package]]
+name = "serde"
+version = "1.0.130"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "sha256:PLACEHOLDER"
+
+[[package]]
+name = "anyhow"
+version = "1.0.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "sha256:PLACEHOLDER"
