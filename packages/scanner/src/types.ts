@@ -72,6 +72,20 @@ type PackageEvent = BaseEvent & {
   };
 };
 
+type RegistryItemEvent = BaseEvent & {
+  type: 'registry-item';
+  source: 'npm' | 'pypi' | 'crates';
+  package: string;
+  meta: { latest: string; versions: string[] };
+};
+
+type RegistrySummaryEvent = BaseEvent & {
+  type: 'registry-summary';
+  totalUnique: number;
+  flattenedCount: number;
+  counts: { npm: number; pypi: number; crates: number };
+}
+
 type ProjectDoneEvent = BaseEvent & {
   type: 'project-done';
   project: string;
@@ -103,6 +117,8 @@ type ScanEvent =
   | DiscoverEvent
   | ProjectStartEvent
   | PackageEvent
+  | RegistryItemEvent
+  | RegistrySummaryEvent
   | ProjectDoneEvent
   | LogEvent
   | ErrorEvent

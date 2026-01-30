@@ -134,14 +134,25 @@ function parsePackageJson(file: string, content: string): Package | null {
       if (lockData.packages && typeof lockData.packages === "object") {
         for (const [key, info] of Object.entries(lockData.packages || {})) {
           try {
+            // skip root package entry (key === "")
+            if (typeof key === "string" && key.trim() === "") continue;
+
             const ver = (info as any).version;
             // derive a candidate name from key when possible
             let nameFromKey: string | undefined;
             if (typeof key === "string" && key.includes("node_modules/")) {
-              nameFromKey = path.basename(key);
+              // extract the part after the first node_modules/ to get the package path
+              const after = key.split('node_modules/').pop() || '';
+              // capture a scoped (@scope/name) or unscoped (name) package identifier
+              const m = after.match(/^(@[^\/]+\/[^^\/]+|[^\/]+)/);
+              nameFromKey = m ? m[0] : after;
             } else if ((info as any).name) {
               nameFromKey = (info as any).name;
             }
+
+            // avoid adding the project itself to deps
+            if (nameFromKey && nameFromKey === name) continue;
+
             if (nameFromKey && ver) {
               if (deps[nameFromKey]) {
                 (deps[nameFromKey] as DependencyInfo).installedVersion = ver;
@@ -216,7 +227,7 @@ function parsePyprojectToml(file: string, content: string): Package | null {
     const poetryLockPath = path.join(path.dirname(file), "poetry.lock");
     if (fs.existsSync(poetryLockPath)) {
       const lockContent = fs.readFileSync(poetryLockPath, "utf-8");
-      const blocks = lockContent.split(/\n\[\[package\]\]\n/).filter(Boolean);
+      const blocks = lockContent.split('\n[[package]]\n').filter(Boolean);
       for (const block of blocks) {
         const nameMatch = block.match(/^name\s*=\s*"([^"]+)"/m);
         const versionMatch = block.match(/^version\s*=\s*"([^"]+)"/m);
@@ -409,7 +420,7 @@ function saveCacheToPath(cache: Record<string, any>, cachePath?: string): void {
   }
 }
 
-async function fetchNpmUpdates(packageNames: Set<string>, opts: ScanOptions & { signal?: AbortSignal }, cache: Record<string, any>): Promise<Record<string, { latest?: string; versions: string[] }>> {
+async function fetchNpmUpdates(packageNames: Set<string>, opts: ScanOptions & { signal?: AbortSignal }, cache: Record<string, any>, onItem?: (pkgName: string, meta: { latest?: string; versions: string[] }) => void): Promise<Record<string, { latest?: string; versions: string[] }>> {
   const updates: Record<string, { latest?: string; versions: string[] }> = {};
   if (opts.skipRegistries) {
     if (opts.verbose) console.log("Skipping npm registry fetches due to options.skipRegistries");
@@ -429,6 +440,7 @@ async function fetchNpmUpdates(packageNames: Set<string>, opts: ScanOptions & { 
     if (cache[cacheKey]) {
       if (opts.verbose) console.log(`npm cache hit: ${pkgName}`);
       updates[pkgName] = cache[cacheKey];
+      if (onItem) onItem(pkgName, Object.assign({}, updates[pkgName], { state: 'cached' }));
       return;
     }
     try {
@@ -440,6 +452,7 @@ async function fetchNpmUpdates(packageNames: Set<string>, opts: ScanOptions & { 
         const latest = data && data['dist-tags'] && data['dist-tags'].latest ? data['dist-tags'].latest : undefined;
         updates[pkgName] = { latest, versions };
         cache[cacheKey] = updates[pkgName];
+        if (onItem) onItem(pkgName, Object.assign({}, updates[pkgName], { state: 'done' }));
       }
     } catch (err) {
       if (opts.verbose) console.error(`Error fetching npm info for ${pkgName}:`, err);
@@ -451,7 +464,7 @@ async function fetchNpmUpdates(packageNames: Set<string>, opts: ScanOptions & { 
   return updates;
 }
 
-async function fetchPyPiUpdates(packageNames: Set<string>, opts: ScanOptions & { signal?: AbortSignal }, cache: Record<string, any>): Promise<Record<string, { latest?: string; versions: string[] }>> {
+async function fetchPyPiUpdates(packageNames: Set<string>, opts: ScanOptions & { signal?: AbortSignal }, cache: Record<string, any>, onItem?: (pkgName: string, meta: { latest?: string; versions: string[] }) => void): Promise<Record<string, { latest?: string; versions: string[] }>> {
   const updates: Record<string, { latest?: string; versions: string[] }> = {};
   if (opts.skipRegistries) {
     if (opts.verbose) console.log("Skipping PyPI registry fetches due to options.skipRegistries");
@@ -471,6 +484,7 @@ async function fetchPyPiUpdates(packageNames: Set<string>, opts: ScanOptions & {
     if (cache[cacheKey]) {
       if (opts.verbose) console.log(`PyPI cache hit: ${pkgName}`);
       updates[pkgName] = cache[cacheKey];
+      if (onItem) onItem(pkgName, Object.assign({}, updates[pkgName], { state: 'cached' }));
       return;
     }
     try {
@@ -482,6 +496,7 @@ async function fetchPyPiUpdates(packageNames: Set<string>, opts: ScanOptions & {
         const latest = data && data.info && data.info.version ? data.info.version : undefined;
         updates[pkgName] = { latest, versions: releases };
         cache[cacheKey] = updates[pkgName];
+        if (onItem) onItem(pkgName, Object.assign({}, updates[pkgName], { state: 'done' }));
       }
     } catch (err) {
       if (opts.verbose) console.error(`Error fetching PyPI info for ${pkgName}:`, err);
@@ -493,7 +508,7 @@ async function fetchPyPiUpdates(packageNames: Set<string>, opts: ScanOptions & {
   return updates;
 }
 
-async function fetchCratesIoUpdates(packageNames: Set<string>, opts: ScanOptions & { signal?: AbortSignal }, cache: Record<string, any>): Promise<Record<string, { latest?: string; versions: string[] }>> {
+async function fetchCratesIoUpdates(packageNames: Set<string>, opts: ScanOptions & { signal?: AbortSignal }, cache: Record<string, any>, onItem?: (pkgName: string, meta: { latest?: string; versions: string[] }) => void): Promise<Record<string, { latest?: string; versions: string[] }>> {
   const updates: Record<string, { latest?: string; versions: string[] }> = {};
   if (opts.skipRegistries) {
     if (opts.verbose) console.log("Skipping crates.io registry fetches due to options.skipRegistries");
@@ -513,16 +528,19 @@ async function fetchCratesIoUpdates(packageNames: Set<string>, opts: ScanOptions
     if (cache[cacheKey]) {
       if (opts.verbose) console.log(`crates.io cache hit: ${pkgName}`);
       updates[pkgName] = cache[cacheKey];
+      if (onItem) onItem(pkgName, Object.assign({}, updates[pkgName], { state: 'cached' }));
       return;
     }
     try {
       if (opts.verbose) console.log(`Fetching crates.io info: ${pkgName}`);
-      const response = await fetch(`https://crates.io/api/v1/crates/${encodeURIComponent(pkgName)}`, { signal: (opts as any).signal } as any);
+      // crates.io requires a User-Agent header, otherwise it returns 403
+      const headers = { 'User-Agent': 'packpilot-scanner (https://github.com/packpilot)' };
+      const response = await fetch(`https://crates.io/api/v1/crates/${encodeURIComponent(pkgName)}`, { signal: (opts as any).signal, headers } as any);
       if (response && response.ok) {
         const data = await response.json();
         const latest = data && data.crate && data.crate.max_version ? data.crate.max_version : undefined;
         // Try to fetch versions list as well
-        const vresp = await fetch(`https://crates.io/api/v1/crates/${encodeURIComponent(pkgName)}/versions`, { signal: (opts as any).signal } as any);
+        const vresp = await fetch(`https://crates.io/api/v1/crates/${encodeURIComponent(pkgName)}/versions`, { signal: (opts as any).signal, headers } as unknown as any);
         let versions: string[] = [];
         if (vresp && vresp.ok) {
           const vdata = await vresp.json();
@@ -530,6 +548,7 @@ async function fetchCratesIoUpdates(packageNames: Set<string>, opts: ScanOptions
         }
         updates[pkgName] = { latest, versions };
         cache[cacheKey] = updates[pkgName];
+        if (onItem) onItem(pkgName, Object.assign({}, updates[pkgName], { state: 'done' }));
       }
     } catch (err) {
       if (opts.verbose) console.error(`Error fetching crates.io info for ${pkgName}:`, err);
@@ -736,12 +755,47 @@ export function scanStream(
       const pypiNames = bySource['pypi'] || new Set<string>();
       const cratesNames = bySource['crates.io'] || new Set<string>();
 
+      // Emit summary of unique packages we will fetch from registries.
+      // Always include counts and total; include full lists only if opts.emitPackageList is truthy.
+      const totalUnique = npmNames.size + pypiNames.size + cratesNames.size;
+      const flattenedCount = flatPackages.length; // total occurrences across all projects
+       const summaryEvent: any = {
+         type: 'registry-summary',
+         totalUnique,
+         flattenedCount,
+         counts: {
+           npm: npmNames.size,
+           pypi: pypiNames.size,
+           crates: cratesNames.size,
+         },
+       };
+      if ((opts as any).emitPackageList) {
+        summaryEvent.packages = {
+          npm: Array.from(npmNames),
+          pypi: Array.from(pypiNames),
+          'crates.io': Array.from(cratesNames),
+        };
+      }
+      emit(summaryEvent as ScanEvent);
+
+      // Emit a single registry-item 'fetching' event for each unique package we will query.
+      // Consumers can use these to show overall registry fetch progress without per-project duplication.
+      for (const pkgName of npmNames) {
+        emit({ type: 'registry-item', source: 'npm', package: pkgName, meta: { state: 'fetching' } } as unknown as ScanEvent);
+      }
+      for (const pkgName of pypiNames) {
+        emit({ type: 'registry-item', source: 'pypi', package: pkgName, meta: { state: 'fetching' } } as unknown as ScanEvent);
+      }
+      for (const pkgName of cratesNames) {
+        emit({ type: 'registry-item', source: 'crates.io', package: pkgName, meta: { state: 'fetching' } } as unknown as ScanEvent);
+      }
+
       emit({ type: 'log', level: 'info', msg: `Fetching registry metadata for ${npmNames.size + pypiNames.size + cratesNames.size} packages` } as unknown as ScanEvent);
 
       const [npmData, pypiData, cratesData] = await Promise.all([
-        fetchNpmUpdates(npmNames, opts as any, cache),
-        fetchPyPiUpdates(pypiNames, opts as any, cache),
-        fetchCratesIoUpdates(cratesNames, opts as any, cache),
+        fetchNpmUpdates(npmNames, opts as any, cache, (pkg, meta) => emit({ type: 'registry-item', source: 'npm', package: pkg, meta } as unknown as ScanEvent)),
+        fetchPyPiUpdates(pypiNames, opts as any, cache, (pkg, meta) => emit({ type: 'registry-item', source: 'pypi', package: pkg, meta } as unknown as ScanEvent)),
+        fetchCratesIoUpdates(cratesNames, opts as any, cache, (pkg, meta) => emit({ type: 'registry-item', source: 'crates.io', package: pkg, meta } as unknown as ScanEvent)),
       ]);
 
       try {
@@ -867,3 +921,4 @@ export function scanStream(
     }
   })();
 }
+
