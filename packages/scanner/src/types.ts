@@ -4,11 +4,23 @@ interface Snapshot {
   packages?: PackageJson[];
 }
 
+interface VulnerabilityInfo {
+  id: string;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'unknown';
+  title: string;
+  description?: string;
+  affectedVersions?: string;
+  fixedVersion?: string;
+  url?: string;
+  publishedAt?: string;
+}
+
 interface DependencyInfo {
   declaredVersion: string;
   installedVersion?: string;
   latestVersion?: string;
   latestSatisfyingVersion?: string;
+  vulnerabilities?: VulnerabilityInfo[];
 }
 
 interface Package {
@@ -110,7 +122,21 @@ type ErrorEvent = BaseEvent & {
 type SnapshotEvent = BaseEvent & {
   type: 'snapshot';
   path?: string;
-  summary?: { projects: number; packages: number; outdated: number };
+  summary?: { projects: number; packages: number; outdated: number; vulnerabilities?: number };
+};
+
+type VulnerabilityEvent = BaseEvent & {
+  type: 'vulnerability';
+  package: string;
+  version: string;
+  source: 'npm' | 'pypi' | 'crates.io';
+  vulnerability: VulnerabilityInfo;
+};
+
+type VulnerabilityScanProgressEvent = BaseEvent & {
+  type: 'vulnerability-scan-progress';
+  scanned: number;
+  total: number;
 };
 
 type ScanEvent =
@@ -122,6 +148,8 @@ type ScanEvent =
   | ProjectDoneEvent
   | LogEvent
   | ErrorEvent
-  | SnapshotEvent;
+  | SnapshotEvent
+  | VulnerabilityEvent
+  | VulnerabilityScanProgressEvent;
 
-export { Snapshot, PackageJson, Package, DependencyInfo, ScanOptions, ScanStreamOptions, BaseEvent, DiscoverEvent, ProjectStartEvent, PackageEvent, ProjectDoneEvent, LogEvent, ErrorEvent, ScanEvent };
+export { Snapshot, PackageJson, Package, DependencyInfo, VulnerabilityInfo, ScanOptions, ScanStreamOptions, BaseEvent, DiscoverEvent, ProjectStartEvent, PackageEvent, ProjectDoneEvent, LogEvent, ErrorEvent, VulnerabilityEvent, VulnerabilityScanProgressEvent, ScanEvent };

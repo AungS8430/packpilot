@@ -104,6 +104,7 @@ async function main() {
 
     const projectParsingBar = multiBar.create(1, 0, { name: 'Parsing Projects   ', status: 'Starting...' });
     const packagesBar = multiBar.create(1, 0, { name: 'Reading Packages   ', status: 'Waiting...' });
+    const vulnBar = multiBar.create(1, 0, { name: 'Vuln Scanning      ', status: 'Waiting...' });
     const projectProcessingBar = multiBar.create(1, 0, { name: 'Processing Projects', status: 'Waiting...' });
 
     let packagesSeen = 0;
@@ -113,6 +114,8 @@ async function main() {
     let projectsParsed = 0;
     let projectsProcessed = 0;
     let projectsTotal = 1;
+    let vulnTotal = 1;
+    let vulnScanned = 0;
 
     scanStream(argv.dir!, { ...scanOptions, outPath: argv.out! }, (event: any) => {
       switch (event.type) {
@@ -196,9 +199,28 @@ async function main() {
           break;
         }
 
+        case "vulnerability-scan-progress": {
+          vulnTotal = event.total || 1;
+          vulnScanned = event.scanned || 0;
+          vulnBar.setTotal(vulnTotal);
+          let status = 'Waiting...';
+          if (vulnScanned === 0) {
+            status = 'Waiting...';
+          } else if (vulnScanned < vulnTotal) {
+            status = 'In Progress';
+          } else if (vulnScanned >= vulnTotal) {
+            status = 'Done';
+          }
+          vulnBar.update(vulnScanned, { status });
+          break;
+        }
+
         case "snapshot":
           // finalize totals and stop
           packagesBar.setTotal(Math.max(packagesSeen, packagesBar.getTotal() || 0));
+          packagesBar.update(undefined, { status: 'Done' });
+          vulnBar.setTotal(Math.max(vulnScanned, vulnBar.getTotal() || 0));
+          vulnBar.update(undefined, { status: 'Done' });
 
           // mark packages reading as done
           packagesBar.update(undefined, { status: 'Done' });

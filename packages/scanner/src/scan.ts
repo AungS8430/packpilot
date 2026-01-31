@@ -3,7 +3,7 @@
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { Package, PackageJson, DependencyInfo, Snapshot, ScanOptions, ScanStreamOptions, ScanEvent } from "./types";
+import { Package, PackageJson, DependencyInfo, VulnerabilityInfo, Snapshot, ScanOptions, ScanStreamOptions, ScanEvent } from "./types";
 
 function resolveRoot(root: string): string {
   const resolved = path.resolve(root);
@@ -606,6 +606,203 @@ async function fetchUpdates(packages: Package[]): Promise<Record<string, Set<str
   return bySource;
 }
 
+async function checkVulnerabilities(
+  packages: Array<{ name: string; version: string; ecosystem: string }>,
+  opts: ScanOptions & { signal?: AbortSignal },
+  cache: Record<string, any>,
+  onVulnerability?: (pkgName: string, version: string, vulns: VulnerabilityInfo[]) => void,
+  onProgress?: (scanned: number, total: number) => void
+): Promise<Record<string, VulnerabilityInfo[]>> {
+  const results: Record<string, VulnerabilityInfo[]> = {};
+
+  if (opts.skipRegistries) {
+    if (opts.verbose) console.log("Skipping vulnerability checks due to options.skipRegistries");
+    return results;
+  }
+
+  const fetch = safeRequire<any>("node-fetch") || safeRequire<any>("cross-fetch") || safeRequire<any>("undici");
+  if (!fetch) {
+    if (opts.verbose) console.warn("Fetch library not available; skipping vulnerability checks.");
+    return results;
+  }
+
+  // Map ecosystem names to OSV ecosystem format
+  function mapEcosystem(source: string): string {
+    switch (source) {
+      case 'npm': return 'npm';
+      case 'pypi': return 'PyPI';
+      case 'crates.io': return 'crates.io';
+      default: return source;
+    }
+  }
+
+  // Parse severity from CVSS or severity string
+  function parseSeverity(vuln: any): 'critical' | 'high' | 'medium' | 'low' | 'unknown' {
+    // Check database_specific severity
+    if (vuln.database_specific?.severity) {
+      const sev = vuln.database_specific.severity.toLowerCase();
+      if (sev === 'critical') return 'critical';
+      if (sev === 'high') return 'high';
+      if (sev === 'medium' || sev === 'moderate') return 'medium';
+      if (sev === 'low') return 'low';
+    }
+
+    // Check CVSS score from severity array
+    if (vuln.severity && Array.isArray(vuln.severity)) {
+      for (const s of vuln.severity) {
+        if (s.type === 'CVSS_V3' && s.score) {
+          const score = parseFloat(s.score);
+          if (score >= 9.0) return 'critical';
+          if (score >= 7.0) return 'high';
+          if (score >= 4.0) return 'medium';
+          if (score >= 0.1) return 'low';
+        }
+      }
+    }
+
+    return 'unknown';
+  }
+
+  // Extract fixed version from affected ranges
+  function extractFixedVersion(affected: any): string | undefined {
+    if (!affected?.ranges) return undefined;
+    for (const range of affected.ranges) {
+      if (range.events) {
+        for (const event of range.events) {
+          if (event.fixed) return event.fixed;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  // Build version ranges string
+  function buildAffectedVersions(affected: any): string | undefined {
+    if (!affected?.ranges) return undefined;
+    const parts: string[] = [];
+    for (const range of affected.ranges) {
+      if (range.events) {
+        let introduced: string | undefined;
+        let fixed: string | undefined;
+        for (const event of range.events) {
+          if (event.introduced) introduced = event.introduced;
+          if (event.fixed) fixed = event.fixed;
+        }
+        if (introduced && fixed) {
+          parts.push(`>=${introduced}, <${fixed}`);
+        } else if (introduced) {
+          parts.push(`>=${introduced}`);
+        } else if (fixed) {
+          parts.push(`<${fixed}`);
+        }
+      }
+    }
+    return parts.length > 0 ? parts.join(' || ') : undefined;
+  }
+
+  // Query OSV API in batches (OSV supports batch queries)
+  const OSV_BATCH_SIZE = 1000;
+  const batches: Array<Array<{ name: string; version: string; ecosystem: string }>> = [];
+  for (let i = 0; i < packages.length; i += OSV_BATCH_SIZE) {
+    batches.push(packages.slice(i, i + OSV_BATCH_SIZE));
+  }
+
+  let scanned = 0;
+  for (const batch of batches) {
+    if (opts.signal?.aborted) break;
+
+    // Check cache first, separate cached and uncached
+    const uncached: Array<{ name: string; version: string; ecosystem: string; cacheKey: string }> = [];
+    for (const pkg of batch) {
+      const cacheKey = `vuln:${pkg.ecosystem}:${pkg.name}:${pkg.version}`;
+      // Only use in-memory results for this run, do not persist vulnerability results to disk cache
+      if (results[`${pkg.ecosystem}:${pkg.name}@${pkg.version}`] !== undefined) {
+        // Already checked in this run
+
+      } else {
+        uncached.push({ ...pkg, cacheKey });
+      }
+    }
+
+    if (uncached.length === 0) continue;
+
+    // Build OSV batch query
+    const queries = uncached.map(pkg => ({
+      package: {
+        name: pkg.name,
+        ecosystem: mapEcosystem(pkg.ecosystem),
+      },
+      version: pkg.version,
+    }));
+
+    try {
+      if (opts.verbose) console.log(`Checking vulnerabilities for ${uncached.length} packages via OSV...`);
+
+      const response = await fetch('https://api.osv.dev/v1/querybatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queries }),
+        signal: opts.signal,
+      } as any);
+
+      if (response && response.ok) {
+        const data = await response.json();
+        const resultsArray = data.results || [];
+
+        for (let i = 0; i < uncached.length; i++) {
+          const pkg = uncached[i];
+          const key = `${pkg.ecosystem}:${pkg.name}@${pkg.version}`;
+          const vulnResult = resultsArray[i];
+          const vulns: VulnerabilityInfo[] = [];
+
+          if (vulnResult?.vulns && Array.isArray(vulnResult.vulns)) {
+            for (const v of vulnResult.vulns) {
+              // Find the affected entry for this package
+              const affected = v.affected?.find((a: any) =>
+                a.package?.name?.toLowerCase() === pkg.name.toLowerCase()
+              );
+
+              const vulnInfo: VulnerabilityInfo = {
+                id: v.id || 'unknown',
+                severity: parseSeverity(v),
+                title: v.summary || v.details?.substring(0, 100) || v.id || 'Unknown vulnerability',
+                description: v.details,
+                affectedVersions: buildAffectedVersions(affected),
+                fixedVersion: extractFixedVersion(affected),
+                url: v.references?.find((r: any) => r.type === 'ADVISORY')?.url ||
+                     v.references?.find((r: any) => r.type === 'WEB')?.url ||
+                     v.references?.[0]?.url ||
+                     `https://osv.dev/vulnerability/${v.id}`,
+                publishedAt: v.published,
+              };
+              vulns.push(vulnInfo);
+            }
+          }
+
+          results[key] = vulns;
+          // Do NOT persist vulnerability results to the cache object
+          // cache[pkg.cacheKey] = vulns; // <-- REMOVE THIS LINE
+
+          if (onVulnerability && vulns.length > 0) {
+            onVulnerability(pkg.name, pkg.version, vulns);
+          }
+        }
+      } else {
+        if (opts.verbose) {
+          console.error(`OSV API returned non-ok status: ${response?.status}`);
+        }
+      }
+    } catch (err) {
+      if (opts.verbose) console.error('Error querying OSV API:', err);
+    }
+
+    scanned += batch.length;
+    if (onProgress) onProgress(Math.min(scanned, packages.length), packages.length);
+  }
+
+  return results;
+}
+
 async function writeAtomic(filePath: string, data: string) {
   const tmp = `${filePath}.tmp-${Date.now()}`;
   await fs.promises.writeFile(tmp, data, 'utf8');
@@ -678,6 +875,44 @@ export async function scanWorkspace(root: string, opts: ScanOptions = {}): Promi
         }
       }
     }
+  }
+
+  // Collect all packages with versions for vulnerability scanning
+  const packagesForVulnCheck: Array<{ name: string; version: string; ecosystem: string }> = [];
+  for (const pkg of flatPackages) {
+    const ecosystem = pkg.source || 'unknown';
+    for (const [depName, info] of Object.entries(pkg.dependencies)) {
+      // Use installed version if available, otherwise fall back to declared version (cleaned)
+      const version = info.installedVersion || info.declaredVersion?.replace(/^[\^~>=<]+/, '');
+      if (version && /^\d/.test(version)) {
+        packagesForVulnCheck.push({ name: depName, version, ecosystem });
+      }
+    }
+  }
+
+  // Check for vulnerabilities
+  const vulnResults = await checkVulnerabilities(packagesForVulnCheck, opts as any, cache);
+
+  // Apply vulnerability results to dependency info
+  for (const pkg of flatPackages) {
+    const ecosystem = pkg.source || 'unknown';
+    for (const [depName, info] of Object.entries(pkg.dependencies)) {
+      const version = info.installedVersion || info.declaredVersion?.replace(/^[\^~>=<]+/, '');
+      if (version) {
+        const key = `${ecosystem}:${depName}@${version}`;
+        const vulns = vulnResults[key];
+        if (vulns && vulns.length > 0) {
+          info.vulnerabilities = vulns;
+        }
+      }
+    }
+  }
+
+  // Save cache again after vulnerability checks
+  try {
+    saveCacheToPath(cache, opts.cachePath);
+  } catch (err) {
+    if (opts.verbose) console.warn("Failed to save cache after vulnerability check:", err);
   }
 
   return {
@@ -804,6 +1039,86 @@ export function scanStream(
         if (opts.verbose) console.warn('Failed to save cache:', err);
       }
 
+      // Collect all packages with versions for vulnerability scanning
+      const packagesForVulnCheck: Array<{ name: string; version: string; ecosystem: string }> = [];
+      for (const pkg of flatPackages) {
+        const ecosystem = pkg.source || 'unknown';
+        for (const [depName, info] of Object.entries(pkg.dependencies)) {
+          const version = info.installedVersion || info.declaredVersion?.replace(/^[\^~>=<]+/, '');
+          if (version && /^\d/.test(version)) {
+            packagesForVulnCheck.push({ name: depName, version, ecosystem });
+          }
+        }
+      }
+
+      emit({
+        type: 'vulnerability-scan-progress',
+        scanned: 0,
+        total: packagesForVulnCheck.length,
+        time: new Date().toISOString(),
+        seq: ++seq
+      } as any);
+
+      emit({ type: 'log', level: 'info', msg: `Checking vulnerabilities for ${packagesForVulnCheck.length} packages` } as unknown as ScanEvent);
+
+      // Check for vulnerabilities
+      const vulnResults = await checkVulnerabilities(
+        packagesForVulnCheck,
+        opts as any,
+        cache,
+        (pkgName, version, vulns) => {
+          // Emit vulnerability events for each vulnerability found
+          for (const vuln of vulns) {
+            const pkg = packagesForVulnCheck.find(p => p.name === pkgName && p.version === version);
+            const source = (pkg?.ecosystem || 'npm') as 'npm' | 'pypi' | 'crates.io';
+            emit({
+              type: 'vulnerability',
+              package: pkgName,
+              version,
+              source,
+              vulnerability: vuln,
+            } as unknown as ScanEvent);
+          }
+        },
+        (scanned, total) => {
+          emit({
+            type: 'vulnerability-scan-progress',
+            scanned,
+            total,
+            time: new Date().toISOString(),
+            seq: ++seq
+          } as any);
+        }
+      );
+
+      // Build a map for quick vulnerability lookup
+      const vulnMap = new Map<string, VulnerabilityInfo[]>();
+      for (const [key, vulns] of Object.entries(vulnResults)) {
+        vulnMap.set(key, vulns);
+      }
+
+      // Apply vulnerability results to dependency info
+      for (const pkg of flatPackages) {
+        const ecosystem = pkg.source || 'unknown';
+        for (const [depName, info] of Object.entries(pkg.dependencies)) {
+          const version = info.installedVersion || info.declaredVersion?.replace(/^[\^~>=<]+/, '');
+          if (version) {
+            const key = `${ecosystem}:${depName}@${version}`;
+            const vulns = vulnMap.get(key);
+            if (vulns && vulns.length > 0) {
+              info.vulnerabilities = vulns;
+            }
+          }
+        }
+      }
+
+      // Save cache again after vulnerability checks
+      try {
+        saveCacheToPath(cache, opts.cachePath);
+      } catch (err) {
+        if (opts.verbose) console.warn('Failed to save cache after vulnerability check:', err);
+      }
+
       const semver = safeRequire<any>('semver');
       function computeStatus(installed?: string | null, declared?: string | null, latest?: string | null, matching?: string | null) {
         const result: { status: 'ok' | 'outdated' | 'unknown'; updateType?: 'major' | 'minor' | 'patch' | 'unknown' } = { status: 'unknown' };
@@ -832,6 +1147,7 @@ export function scanStream(
       let totalProjects = 0;
       let totalPackages = 0;
       let totalOutdated = 0;
+      let totalVulnerabilities = 0;
 
       for (const proj of projects) {
         totalProjects++;
@@ -839,6 +1155,7 @@ export function scanStream(
         const start = Date.now();
         let projectTotal = 0;
         let projectOutdated = 0;
+        let projectVulnerabilities = 0;
 
         for (const pkg of proj.packages) {
           for (const [depName, info] of Object.entries(pkg.dependencies)) {
@@ -871,6 +1188,13 @@ export function scanStream(
               totalOutdated++;
             }
 
+            // Count vulnerabilities
+            const vulnCount = info.vulnerabilities?.length || 0;
+            if (vulnCount > 0) {
+              projectVulnerabilities += vulnCount;
+              totalVulnerabilities += vulnCount;
+            }
+
             const pkgEvent: any = {
               type: 'package',
               project: projectPath,
@@ -884,6 +1208,8 @@ export function scanStream(
                 status: st.status,
                 updateType: st.updateType,
                 manifestFile: proj.manifest,
+                vulnerabilities: info.vulnerabilities || [],
+                vulnerabilityCount: vulnCount,
               },
             };
 
@@ -892,7 +1218,7 @@ export function scanStream(
         }
 
         const durationMs = Date.now() - start;
-        emit({ type: 'project-done', project: projectPath, counts: { total: projectTotal, outdated: projectOutdated, unknown: Math.max(0, projectTotal - projectOutdated) }, durationMs } as unknown as ScanEvent);
+        emit({ type: 'project-done', project: projectPath, counts: { total: projectTotal, outdated: projectOutdated, unknown: Math.max(0, projectTotal - projectOutdated), vulnerabilities: projectVulnerabilities }, durationMs } as unknown as ScanEvent);
       }
 
       // Build snapshot
@@ -905,14 +1231,14 @@ export function scanStream(
       if (opts.outPath) {
         try {
           await writeAtomic(opts.outPath, JSON.stringify(snapshot, null, 2));
-          emit({ type: 'snapshot', path: opts.outPath, summary: { projects: totalProjects, packages: totalPackages, outdated: totalOutdated } } as unknown as ScanEvent);
+          emit({ type: 'snapshot', path: opts.outPath, summary: { projects: totalProjects, packages: totalPackages, outdated: totalOutdated, vulnerabilities: totalVulnerabilities } } as unknown as ScanEvent);
           if (done) done(null, opts.outPath);
         } catch (err) {
           emit({ type: 'error', scope: 'global', message: `Failed to write snapshot to ${opts.outPath}`, detail: err } as unknown as ScanEvent);
           if (done) done(err as Error);
         }
       } else {
-        emit({ type: 'snapshot', summary: { projects: totalProjects, packages: totalPackages, outdated: totalOutdated } } as unknown as ScanEvent);
+        emit({ type: 'snapshot', summary: { projects: totalProjects, packages: totalPackages, outdated: totalOutdated, vulnerabilities: totalVulnerabilities } } as unknown as ScanEvent);
         if (done) done(null, undefined);
       }
     } catch (err) {
