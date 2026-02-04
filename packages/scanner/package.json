@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "ts-node src/cli.ts",
+    "dev-scan": "ts-node src/scan.ts",
     "build": "tsc -p tsconfig.json",
     "scan": "node dist/scan.js",
     "test": "vitest"
