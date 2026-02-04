@@ -10,6 +10,7 @@ interface VulnerabilityInfo {
   title: string;
   description?: string;
   affectedVersions?: string;
+  affectedVersionList?: string[];
   fixedVersion?: string;
   url?: string;
   publishedAt?: string;

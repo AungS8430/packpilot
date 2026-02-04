@@ -593,6 +593,34 @@ function chooseLatestSatisfying(declaredRange: string, versions: string[]): stri
   return versions.slice().sort().reverse()[0];
 }
 
+function isVersionAffected(version: string, vuln: VulnerabilityInfo, semver: any): boolean {
+  if (vuln.affectedVersionList && vuln.affectedVersionList.includes(version)) return true;
+  if (vuln.affectedVersions && typeof semver?.satisfies === 'function') {
+    try {
+      if (semver.satisfies(version, vuln.affectedVersions)) return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+function chooseUpgradeTarget(installed: string | undefined, vuln: VulnerabilityInfo, versions: string[]): string | undefined {
+  if (!Array.isArray(versions) || versions.length === 0) return undefined;
+  const semver = safeRequire<any>('semver');
+  if (!semver || typeof semver.valid !== 'function' || typeof semver.compare !== 'function') return undefined;
+
+  const valid = versions.filter((v) => semver.valid(v)).sort(semver.compare);
+  if (valid.length === 0) return undefined;
+
+  const installedValid = installed && semver.valid(installed) ? installed : undefined;
+  for (const v of valid) {
+    if (installedValid && semver.lte(v, installedValid)) continue;
+    if (!isVersionAffected(v, vuln, semver)) return v;
+  }
+  return undefined;
+}
+
 async function fetchUpdates(packages: Package[]): Promise<Record<string, Set<string>>> {
   // existing helper kept for compatibility (returns names grouped by source)
   const bySource: Record<string, Set<string>> = {};
@@ -676,10 +704,15 @@ async function checkVulnerabilities(
     return undefined;
   }
 
-  // Build version ranges string
-  function buildAffectedVersions(affected: any): string | undefined {
+  function extractAffectedVersionList(affected: any): string[] | undefined {
+    if (!Array.isArray(affected?.versions) || affected.versions.length === 0) return undefined;
+    return affected.versions.slice();
+  }
+
+  // Extracts the range of affected versions from the vulnerability data
+  function extractAffectedVersionRange(affected: any): string | undefined {
     if (!affected?.ranges) return undefined;
-    const parts: string[] = [];
+    const ranges: string[] = [];
     for (const range of affected.ranges) {
       if (range.events) {
         let introduced: string | undefined;
@@ -689,15 +722,15 @@ async function checkVulnerabilities(
           if (event.fixed) fixed = event.fixed;
         }
         if (introduced && fixed) {
-          parts.push(`>=${introduced}, <${fixed}`);
+          ranges.push(`>=${introduced}, <${fixed}`);
         } else if (introduced) {
-          parts.push(`>=${introduced}`);
+          ranges.push(`>=${introduced}`);
         } else if (fixed) {
-          parts.push(`<${fixed}`);
+          ranges.push(`<${fixed}`);
         }
       }
     }
-    return parts.length > 0 ? parts.join(' || ') : undefined;
+    return ranges.length > 0 ? ranges.join(' || ') : undefined;
   }
 
   // Query OSV API in batches (OSV supports batch queries)
@@ -767,7 +800,7 @@ async function checkVulnerabilities(
                 severity: parseSeverity(v),
                 title: v.summary || v.details?.substring(0, 100) || v.id || 'Unknown vulnerability',
                 description: v.details,
-                affectedVersions: buildAffectedVersions(affected),
+                affectedVersionList: extractAffectedVersionList(affected),
                 fixedVersion: extractFixedVersion(affected),
                 url: v.references?.find((r: any) => r.type === 'ADVISORY')?.url ||
                      v.references?.find((r: any) => r.type === 'WEB')?.url ||
@@ -902,6 +935,20 @@ export async function scanWorkspace(root: string, opts: ScanOptions = {}): Promi
         const key = `${ecosystem}:${depName}@${version}`;
         const vulns = vulnResults[key];
         if (vulns && vulns.length > 0) {
+          let meta: { latest?: string; versions: string[] } | undefined;
+          if (ecosystem === 'npm') meta = npmData[depName];
+          else if (ecosystem === 'pypi') meta = pypiData[depName];
+          else if (ecosystem === 'crates.io') meta = cratesData[depName];
+
+          if (meta?.versions?.length) {
+            for (const vuln of vulns) {
+              if (!vuln.fixedVersion) {
+                const upgrade = chooseUpgradeTarget(version, vuln, meta.versions);
+                if (upgrade) vuln.fixedVersion = upgrade;
+              }
+            }
+          }
+
           info.vulnerabilities = vulns;
         }
       }
@@ -1106,6 +1153,20 @@ export function scanStream(
             const key = `${ecosystem}:${depName}@${version}`;
             const vulns = vulnMap.get(key);
             if (vulns && vulns.length > 0) {
+              let meta: { latest?: string; versions: string[] } | undefined;
+              if (ecosystem === 'npm') meta = npmData[depName];
+              else if (ecosystem === 'pypi') meta = pypiData[depName];
+              else if (ecosystem === 'crates.io') meta = cratesData[depName];
+
+              if (meta?.versions?.length) {
+                for (const vuln of vulns) {
+                  if (!vuln.fixedVersion) {
+                    const upgrade = chooseUpgradeTarget(version, vuln, meta.versions);
+                    if (upgrade) vuln.fixedVersion = upgrade;
+                  }
+                }
+              }
+
               info.vulnerabilities = vulns;
             }
           }

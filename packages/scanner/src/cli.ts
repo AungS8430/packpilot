@@ -155,6 +155,9 @@ async function main() {
             packagesSeen += 1;
             packagesBar.increment();
             packagesBar.update(undefined, { status: event.package });
+            if (packagesSeen >= packagesTotal) {
+              packagesBar.update(undefined, { status: 'Done' });
+            }
           }
           break;
         }
