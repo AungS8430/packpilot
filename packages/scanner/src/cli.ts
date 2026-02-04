@@ -7,6 +7,7 @@ import * as process from "node:process";
 import { ScanOptions, Snapshot } from "./types";
 import { scanWorkspace, scanStream } from "./scan";
 import cliProgress from "cli-progress";
+import ansiColors from "ansi-colors";
 
 type Args = {
   dir?: string;
@@ -99,7 +100,7 @@ async function main() {
     const multiBar = new cliProgress.MultiBar({
       clearOnComplete: false,
       hideCursor: true,
-      format: '{name} | {bar} | {value}/{total} | {status}',
+      format: `${ansiColors.bold("{name}")} | {bar} | {value}/{total} | ${ansiColors.dim("{status}")}`,
     }, cliProgress.Presets.rect);
 
     const projectParsingBar = multiBar.create(1, 0, { name: 'Parsing Projects   ', status: 'Starting...' });
@@ -233,9 +234,17 @@ async function main() {
             projectProcessingBar.update(undefined, { status: 'Done' });
           }
 
-          // short delay to allow final bar rendering (cli-progress may need this)
-          // then stop the multibar
-          setTimeout(() => multiBar.stop(), 100);
+          setTimeout(() => {
+            multiBar.stop();
+            console.log();
+            console.log(`Parsed ${ansiColors.bold.blue(event.summary.projects)} Projects`);
+            console.log(`Scanned ${ansiColors.bold.blue(event.summary.packages)} Packages`);
+            console.log(`Outdated ${ansiColors.bold.cyan(event.summary.outdated)} Packages`);
+            console.log(`Found ${ansiColors.bold.red(event.summary.vulnerabilities)} Vulnerabilities`);
+            console.log();
+            console.log("Scan complete. Report written to", argv.out);
+          }, 100);
+
           break;
       }
     });
