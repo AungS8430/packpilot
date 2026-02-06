@@ -195,7 +195,7 @@ async function main() {
           break;
         case 'update-command-start':
           bar.update(undefined, {
-            status: `Running: ${event.command}`
+            status: `Running: ${event.command} at ${event.manifestPath}`
           });
           break;
         case 'update-command-complete':
